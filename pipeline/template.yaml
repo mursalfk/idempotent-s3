@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  idempotent-s3. An S3 upload triggers a Lambda that charges a customer and writes
+  to DynamoDB. A DLQ catches genuinely failed invocations. Set HANDLER_MODE to
+  naive, safe, or robust and FAIL_ONCE to force the async-retry duplicate.
+
+Parameters:
+  HandlerMode:
+    Type: String
+    Default: robust
+    AllowedValues: [naive, safe, robust]
+  FailOnce:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 128
+
+Resources:
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+  StateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: idempotent-s3-state
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+
+  ChargeDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: idempotent-s3-dlq
+
+  ChargeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: idempotent-s3-charge
+      Handler: lambda_function.lambda_handler
+      CodeUri: .
+      Environment:
+        Variables:
+          STATE_TABLE: !Ref StateTable
+          HANDLER_MODE: !Ref HandlerMode
+          FAIL_ONCE: !Ref FailOnce
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt ChargeDLQ.Arn
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref StateTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt ChargeDLQ.QueueName
+      Events:
+        Upload:
+          Type: S3
+          Properties:
+            Bucket: !Ref UploadBucket
+            Events: s3:ObjectCreated:*
+
+Outputs:
+  BucketName:
+    Description: Upload objects here to trigger the charge Lambda.
+    Value: !Ref UploadBucket
+  StateTable:
+    Description: DynamoDB table holding the charge counter and idempotency records.
+    Value: !Ref StateTable
+  DLQUrl:
+    Description: Failed invocations land here.
+    Value: !Ref ChargeDLQ

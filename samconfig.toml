@@ -1,0 +1,15 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "idempotent-s3"
+resolve_s3 = true
+s3_prefix = "idempotent-s3"
+region = "eu-west-3"
+profile = "admin-deploy"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "HandlerMode=\"robust\" FailOnce=\"true\""
+image_repositories = []
+
+[default.global.parameters]
+region = "eu-west-3"
